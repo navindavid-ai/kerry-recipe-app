@@ -96,7 +96,7 @@ for key in ["form_name", "form_steps", "form_prep_time", "form_cook_time", "form
         st.session_state[key] = ""
 
 with st.sidebar.form("recipe_form") as form:
-        st.text_input("Recipe Name", value=st.session_state.get("form_name", default_name), key="form_name")
+    st.text_input("Recipe Name", value=st.session_state.get("form_name", default_name), key="form_name")
     category = st.selectbox("Category", ["Breakfast", "Lunch", "Dinner", "Dessert", "Snack"], index=["Breakfast", "Lunch", "Dinner", "Dessert", "Snack"].index(default_category))
     cuisine = st.selectbox("Cuisine", ["", "South Indian", "North Indian", "Italian", "Mexican", "English", "Thai", "Chinese", "French", "Other"])
     st.text_area("Cooking Steps", value=st.session_state.get("form_steps", default_steps), key="form_steps")
