@@ -1,14 +1,3 @@
-import streamlit as st
-import pandas as pd
-import uuid
-import io
-import base64
-
-st.set_page_config(page_title="Kerry's Recipe App", layout="centered")
-st.title("🍳 Kerry's Recipe App")
-
-    except Exception:
-        return {}
 
 # Handle reset from previous run
 if st.session_state.get("_trigger_reset", False):
