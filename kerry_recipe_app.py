@@ -3,54 +3,9 @@ import pandas as pd
 import uuid
 import io
 import base64
-import openai
 
 st.set_page_config(page_title="Kerry's Recipe App", layout="centered")
 st.title("🍳 Kerry's Recipe App")
-
-# Load OpenAI API key from Streamlit secrets
-openai.api_key = st.secrets["OPENAI_API_KEY"]
-
-def get_recipe_suggestion_from_ai(recipe_name: str) -> dict:
-    prompt = f"""Suggest a recipe based on the dish name '{recipe_name}'.
-Return:
-- Cooking steps
-- Estimated prep time
-- Estimated cook time
-- 2-4 useful tags
-
-Respond in this format:
-Steps:
-1. ...
-2. ...
-Prep Time: ...
-Cook Time: ...
-Tags: ..."""
-    try:
-        response = openai.chat.completions.create(
-            model="gpt-3.5-turbo",
-            messages=[
-                {"role": "system", "content": "You are a helpful recipe assistant."},
-                {"role": "user", "content": prompt}
-            ],
-            temperature=0.7,
-            max_tokens=300
-        )
-        content = response.choices[0].message.content.strip()
-        lines = content.splitlines()
-
-        steps = "\n".join(line for line in lines if line.strip().startswith(tuple("123456789")))
-
-        prep_time = next((line.split(':', 1)[1].strip() for line in lines if line.lower().startswith("prep time")), "")
-        cook_time = next((line.split(':', 1)[1].strip() for line in lines if line.lower().startswith("cook time")), "")
-        tags = next((line.split(':', 1)[1].strip() for line in lines if line.lower().startswith("tags")), "")
-
-        return {
-            "steps": steps,
-            "prep_time": prep_time,
-            "cook_time": cook_time,
-            "tags": tags
-        }
 
     except Exception:
         return {}
@@ -152,21 +107,7 @@ for key in ["form_name", "form_steps", "form_prep_time", "form_cook_time", "form
         st.session_state[key] = ""
 
 with st.sidebar.form("recipe_form") as form:
-    ai_fill = st.form_submit_button("✨ AI Fill From Name")
-    if ai_fill and st.session_state.form_name:
-        with st.spinner("Thinking..."):
-            try:
-                suggestion = get_recipe_suggestion_from_ai(st.session_state.form_name)
-                if suggestion:
-                    st.session_state.form_steps = suggestion["steps"]
-                    st.session_state.form_prep_time = suggestion["prep_time"]
-                    st.session_state.form_cook_time = suggestion["cook_time"]
-                    st.session_state.form_tags = suggestion["tags"]
-                else:
-                    st.info("No suggestions found for this recipe name.")
-            except Exception as e:
-                st.warning("AI is currently unavailable. Please check your OpenAI account or try later.")
-    st.text_input("Recipe Name", value=st.session_state.get("form_name", default_name), key="form_name")
+        st.text_input("Recipe Name", value=st.session_state.get("form_name", default_name), key="form_name")
     category = st.selectbox("Category", ["Breakfast", "Lunch", "Dinner", "Dessert", "Snack"], index=["Breakfast", "Lunch", "Dinner", "Dessert", "Snack"].index(default_category))
     cuisine = st.selectbox("Cuisine", ["", "South Indian", "North Indian", "Italian", "Mexican", "English", "Thai", "Chinese", "French", "Other"])
     st.text_area("Cooking Steps", value=st.session_state.get("form_steps", default_steps), key="form_steps")
