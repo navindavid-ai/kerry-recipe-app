@@ -1,0 +1,169 @@
+import streamlit as st
+import psycopg2
+import pandas as pd
+
+# ✅ This must be FIRST before any other st.something
+st.set_page_config(page_title="Cell Bank Cloud", layout="wide")
+
+# ⛓ Supabase DB connection string
+conn_string = "postgresql://postgres:%21e%3FFTE%40e%40-M7BuP@db.kohlfkrdocbolcgorapw.supabase.co:5432/postgres"
+
+# Connect to DB
+@st.cache_resource
+def connect_db():
+    return psycopg2.connect(conn_string)
+
+conn = connect_db()
+cur = conn.cursor()
+
+# Tabs
+tab1, tab2, tab3 = st.tabs(["🧬 Parental Cell Lines", "🔗 Derived Cell Lines", "📦 Cell Banks"])
+
+# ---------- Sidebar Form ----------
+st.sidebar.header("➕ Add New Parental Cell Line")
+
+with st.sidebar.form("add_parental_line_form"):
+    name = st.text_input("Cell Line Name")
+    disease = st.text_input("Disease")
+    species = st.text_input("Species")
+    source = st.text_input("Source")
+    age = st.text_input("Age")
+    sex = st.selectbox("Sex", ["", "M", "F", "Other"])
+    notes = st.text_area("Notes", key="parental_notes")
+
+    submitted = st.form_submit_button("Add Cell Line")
+
+    if submitted:
+        if name:
+            cur.execute(
+                """
+                INSERT INTO parental_cell_lines (name, disease, species, source, age, sex, notes)
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
+                """,
+                (name, disease, species, source, age, sex, notes)
+            )
+            conn.commit()
+            st.success(f"✅ Cell line '{name}' added!")
+            st.rerun()
+        else:
+            st.warning("⚠️ Name is required.")
+
+# ---------- Tab 1: Parental Cell Lines ----------
+with tab1:
+    st.title("🧬 Parental Cell Lines")
+    cur.execute("SELECT * FROM parental_cell_lines ORDER BY id")
+    rows = cur.fetchall()
+    columns = [desc[0] for desc in cur.description]
+    df = pd.DataFrame(rows, columns=columns)
+    st.dataframe(df, use_container_width=True)
+
+# ---------- Tab 2: Derived Cell Lines ----------
+with tab2:
+    st.title("🔗 Add Derived Cell Line")
+
+    # Load parental lines for dropdown
+    cur.execute("SELECT id, name FROM parental_cell_lines ORDER BY id")
+    parental_options = cur.fetchall()
+    parental_map = {f"{name} (ID: {pid})": pid for pid, name in parental_options}
+
+    if parental_map:
+        selected_parent = st.selectbox("Select Parental Line", list(parental_map.keys()))
+        derived_name = st.text_input("Derived Line Name (e.g. HeLa-GFP)")
+        derived_type = st.selectbox("Derived Type", [
+            "unmodified", "modified", "engineered", "iPS", "hybridoma", "organoid", "primary"
+        ])
+        derived_notes = st.text_area("Notes", key="derived_notes")
+
+        if st.button("Add Derived Line"):
+            if derived_name:
+                cur.execute("""
+                    INSERT INTO derived_cell_lines (parental_id, name, type, notes)
+                    VALUES (%s, %s, %s, %s)
+                """, (
+                    parental_map[selected_parent], derived_name, derived_type, derived_notes
+                ))
+                conn.commit()
+                st.success(f"✅ Derived line '{derived_name}' added!")
+                st.rerun()
+            else:
+                st.warning("⚠️ Name is required.")
+    else:
+        st.warning("⚠️ No parental cell lines found. Please add one first.")
+
+# ---------- Tab 3: Cell Banks ----------
+with tab3:
+    st.title("📦 Cell Bank Records")
+    st.subheader("➕ Add New Cell Bank")
+
+    # Get derived lines for dropdown
+    cur.execute("""
+        SELECT dcl.id, dcl.name, pcl.name
+        FROM derived_cell_lines dcl
+        JOIN parental_cell_lines pcl ON dcl.parental_id = pcl.id
+        ORDER BY dcl.id
+    """)
+    derived_lines = cur.fetchall()
+    derived_line_options = {
+        f"{dname} (Derived ID: {did}, Parent: {pname})": did
+        for did, dname, pname in derived_lines
+    }
+
+    selected_derived = st.selectbox("Derived Cell Line", list(derived_line_options.keys()))
+    bank_type = st.selectbox("Bank Type", ["Original", "Master", "Archive", "Working"])
+
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        site = st.text_input("Site")
+        room = st.text_input("Room")
+        tank = st.text_input("Tank")
+    with col2:
+        tower = st.text_input("Tower")
+        slot = st.text_input("Slot")
+        box = st.text_input("Box")
+    with col3:
+        vial_position = st.text_input("Vial Position")
+        notes = st.text_area("Notes", key="bank_notes")
+
+    if st.button("Add Cell Bank"):
+        cur.execute(
+            """
+            INSERT INTO cell_banks (
+                derived_id, bank_type, site, room, tank, tower, slot,
+                box, vial_position, date_created, notes
+            )
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, NOW(), %s)
+            """,
+            (
+                derived_line_options[selected_derived], bank_type,
+                site, room, tank, tower, slot, box, vial_position, notes
+            )
+        )
+        conn.commit()
+        st.success("✅ Cell bank entry added!")
+        st.rerun()
+
+    st.subheader("📋 Existing Cell Banks")
+
+    # Filter by parental line
+    cur.execute("SELECT id, name FROM parental_cell_lines")
+    filter_options = cur.fetchall()
+    filter_map = {f"{name} (ID: {id})": id for id, name in filter_options}
+    filter_keys = ["All"] + list(filter_map.keys())
+
+    selected_filter = st.selectbox("Filter by Parental Cell Line", filter_keys)
+
+    if selected_filter == "All":
+        cur.execute("SELECT * FROM cell_banks ORDER BY id DESC")
+    else:
+        parent_id = filter_map[selected_filter]
+        cur.execute("""
+            SELECT cb.* FROM cell_banks cb
+            JOIN derived_cell_lines dcl ON cb.derived_id = dcl.id
+            WHERE dcl.parental_id = %s
+            ORDER BY cb.id DESC
+        """, (parent_id,))
+
+    bank_rows = cur.fetchall()
+    bank_columns = [desc[0] for desc in cur.description]
+    bank_df = pd.DataFrame(bank_rows, columns=bank_columns)
+    st.dataframe(bank_df, use_container_width=True)

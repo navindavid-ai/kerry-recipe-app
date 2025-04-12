@@ -1,0 +1,352 @@
+import streamlit as st
+import psycopg2
+import pandas as pd
+
+# ✅ This must be FIRST before any other st.something
+st.set_page_config(page_title="Cell Bank Cloud", layout="wide")
+
+# ⛓ Supabase DB connection string
+conn_string = "postgresql://postgres:%21e%3FFTE%40e%40-M7BuP@db.kohlfkrdocbolcgorapw.supabase.co:5432/postgres"
+
+# Connect to DB
+@st.cache_resource
+def connect_db():
+    return psycopg2.connect(conn_string)
+
+conn = connect_db()
+cur = conn.cursor()
+
+# Tabs
+tab1, tab2, tab3, tab4 = st.tabs(["🧬 Parental Cell Lines", "🔗 Derived Cell Lines", "📦 Cell Banks", "🧪 Vials"])
+
+# ---------- Sidebar Form ----------
+st.sidebar.header("➕ Add New Parental Cell Line")
+
+with st.sidebar.form("add_parental_line_form"):
+    name = st.text_input("Cell Line Name")
+    disease = st.text_input("Disease")
+    species = st.text_input("Species")
+    source = st.text_input("Source")
+    age = st.text_input("Age")
+    sex = st.selectbox("Sex", ["", "M", "F", "Other"])
+    notes = st.text_area("Notes", key="parental_notes")
+
+    submitted = st.form_submit_button("Add Cell Line")
+
+    if submitted:
+        if name:
+            cur.execute(
+                """
+                INSERT INTO parental_cell_lines (name, disease, species, source, age, sex, notes)
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
+                """,
+                (name, disease, species, source, age, sex, notes)
+            )
+            conn.commit()
+            st.success(f"✅ Cell line '{name}' added!")
+            st.rerun()
+        else:
+            st.warning("⚠️ Name is required.")
+
+# ---------- Tab 1: Parental Cell Lines ----------
+with tab1:
+    st.title("🧬 Parental Cell Lines")
+    cur.execute("SELECT * FROM parental_cell_lines ORDER BY id")
+    rows = cur.fetchall()
+    columns = [desc[0] for desc in cur.description]
+    df = pd.DataFrame(rows, columns=columns)
+    st.dataframe(df, use_container_width=True)
+
+    st.subheader("🔍 View & Edit Cell Line")
+    parent_options = [f"{row[1]} (ID: {row[0]})" for row in rows]
+    selected_parent = st.selectbox("Select Cell Line to View", parent_options)
+    selected_id = int(selected_parent.split("ID: ")[-1].replace(")", ""))
+
+    cur.execute("SELECT name, disease, species, source, age, sex, notes FROM parental_cell_lines WHERE id = %s", (selected_id,))
+    line = cur.fetchone()
+
+    if line:
+        st.markdown("---")
+        st.markdown(f"### ✏️ Editing Cell Line: {line[0]} (ID: {selected_id})")
+
+        edit_name = st.text_input("Cell Line Name", value=line[0], key=f"edit_name_{selected_id}")
+        edit_disease = st.text_input("Disease", value=line[1], key=f"edit_disease_{selected_id}")
+        edit_species = st.text_input("Species", value=line[2], key=f"edit_species_{selected_id}")
+        edit_source = st.text_input("Source", value=line[3], key=f"edit_source_{selected_id}")
+        edit_age = st.text_input("Age", value=line[4], key=f"edit_age_{selected_id}")
+        edit_sex = st.selectbox("Sex", ["", "M", "F", "Other"], index=["", "M", "F", "Other"].index(line[5]), key=f"edit_sex_{selected_id}")
+        edit_notes = st.text_area("Notes", value=line[6], key=f"edit_notes_{selected_id}")
+
+        if st.button("Update Cell Line", key=f"update_btn_{selected_id}"):
+            cur.execute("""
+                UPDATE parental_cell_lines
+                SET name = %s, disease = %s, species = %s, source = %s, age = %s, sex = %s, notes = %s
+                WHERE id = %s
+            """, (edit_name, edit_disease, edit_species, edit_source, edit_age, edit_sex, edit_notes, selected_id))
+            conn.commit()
+            st.success(f"✅ Cell line ID {selected_id} updated!")
+            st.rerun()
+
+# ---------- Tab 2: Derived Cell Lines ----------
+with tab2:
+    st.title("🔗 Add Derived Cell Line")
+
+    # Load parental lines for dropdown
+    cur.execute("SELECT id, name FROM parental_cell_lines ORDER BY id")
+    parental_options = cur.fetchall()
+    parental_map = {f"{name} (ID: {pid})": pid for pid, name in parental_options}
+
+    if parental_map:
+        selected_parent = st.selectbox("Select Parental Line", list(parental_map.keys()))
+        derived_name = st.text_input("Derived Line Name (e.g. HeLa-GFP)")
+        derived_type = st.selectbox("Derived Type", [
+            "unmodified", "modified", "engineered", "iPS", "hybridoma", "organoid", "primary"
+        ])
+        derived_notes = st.text_area("Notes", key="derived_notes")
+
+        if st.button("Add Derived Line"):
+            if derived_name:
+                cur.execute("""
+                    INSERT INTO derived_cell_lines (parental_id, name, type, notes)
+                    VALUES (%s, %s, %s, %s)
+                """, (
+                    parental_map[selected_parent], derived_name, derived_type, derived_notes
+                ))
+                conn.commit()
+                st.success(f"✅ Derived line '{derived_name}' added!")
+                st.rerun()
+            else:
+                st.warning("⚠️ Name is required.")
+    else:
+        st.warning("⚠️ No parental cell lines found. Please add one first.")
+
+    st.subheader("✏️ Edit Derived Cell Line")
+
+    cur.execute("""
+        SELECT d.id, d.name, d.type, d.notes, p.name
+        FROM derived_cell_lines d
+        JOIN parental_cell_lines p ON d.parental_id = p.id
+        ORDER BY d.id
+    """)
+    d_rows = cur.fetchall()
+    d_edit_map = {f"{name} (ID: {id}) - Parent: {parent_name}": id for id, name, _, _, parent_name in d_rows}
+
+    if d_edit_map:
+        selected_d_edit = st.selectbox("Select Derived Line to Edit", list(d_edit_map.keys()))
+        selected_d_id = d_edit_map[selected_d_edit]
+
+        cur.execute("SELECT name, type, notes FROM derived_cell_lines WHERE id = %s", (selected_d_id,))
+        dline = cur.fetchone()
+
+        if dline:
+            d_edit_name = st.text_input("Derived Line Name", value=dline[0], key="d_edit_name")
+            d_edit_type = st.selectbox("Derived Type", [
+                "unmodified", "modified", "engineered", "iPS", "hybridoma", "organoid", "primary"
+            ], index=["unmodified", "modified", "engineered", "iPS", "hybridoma", "organoid", "primary"].index(dline[1]), key="d_edit_type")
+            d_edit_notes = st.text_area("Notes", value=dline[2], key="d_edit_notes")
+
+            if st.button("Update Derived Line"):
+                cur.execute("""
+                    UPDATE derived_cell_lines
+                    SET name = %s, type = %s, notes = %s
+                    WHERE id = %s
+                """, (d_edit_name, d_edit_type, d_edit_notes, selected_d_id))
+                conn.commit()
+                st.success(f"✅ Derived line ID {selected_d_id} updated!")
+                st.rerun()
+
+            
+
+# ---------- Tab 3: Cell Banks ----------
+with tab3:
+    st.title("📦 Cell Bank Records")
+    st.subheader("➕ Add New Cell Bank")
+
+    # Get derived lines for dropdown
+    cur.execute("""
+        SELECT dcl.id, dcl.name, pcl.name
+        FROM derived_cell_lines dcl
+        JOIN parental_cell_lines pcl ON dcl.parental_id = pcl.id
+        ORDER BY dcl.id
+    """)
+    derived_lines = cur.fetchall()
+    derived_line_options = {
+        f"{dname} (Derived ID: {did}, Parent: {pname})": did
+        for did, dname, pname in derived_lines
+    }
+
+    selected_derived = st.selectbox("Derived Cell Line", list(derived_line_options.keys()))
+    bank_type = st.selectbox("Bank Type", ["Original", "Master", "Archive", "Working"])
+
+    if st.button("Add Cell Bank"):
+        cur.execute(
+            """
+            INSERT INTO cell_banks (
+                derived_id, bank_type, date_created
+            )
+            VALUES (%s, %s, NOW())
+            """,
+            (
+                derived_line_options[selected_derived], bank_type
+            )
+        )
+        conn.commit()
+        st.success("✅ Cell bank entry added!")
+        st.rerun()
+
+    st.subheader("📋 Existing Cell Banks")
+
+    # Load parental lines for dropdown
+    cur.execute("SELECT id, name FROM parental_cell_lines")
+    filter_options = cur.fetchall()
+    filter_map = {f"{name} (ID: {id})": id for id, name in filter_options}
+    filter_keys = ["All"] + list(filter_map.keys())
+
+    # Filters
+    col1, col2, col3, col4 = st.columns(4)
+
+    with col1:
+        selected_filter = st.selectbox("Filter by Parental Cell Line", filter_keys)
+    with col2:
+        bank_type_filter = st.selectbox("Bank Type", ["All", "Original", "Master", "Archive", "Working"])
+    with col3:
+        site_filter = st.text_input("Site Contains")
+    with col4:
+        room_filter = st.text_input("Room Contains")
+
+    query = """
+        SELECT cb.*, dcl.name AS derived_name,
+               (SELECT COUNT(*) FROM vials v WHERE v.cell_bank_id = cb.id) AS vial_count
+        FROM cell_banks cb
+        JOIN derived_cell_lines dcl ON cb.derived_id = dcl.id
+        JOIN parental_cell_lines pcl ON dcl.parental_id = pcl.id
+        WHERE 1=1
+    """
+    filters = []
+
+    if selected_filter != "All":
+        query += " AND pcl.id = %s"
+        filters.append(filter_map[selected_filter])
+    if bank_type_filter != "All":
+        query += " AND cb.bank_type = %s"
+        filters.append(bank_type_filter)
+    if site_filter:
+        query += " AND cb.site ILIKE %s"
+        filters.append(f"%{site_filter}%")
+    if room_filter:
+        query += " AND cb.room ILIKE %s"
+        filters.append(f"%{room_filter}%")
+
+    query += " ORDER BY cb.id DESC"
+    cur.execute(query, tuple(filters))
+
+    bank_rows = cur.fetchall()
+    bank_columns = [desc[0] for desc in cur.description]
+    bank_df = pd.DataFrame(bank_rows, columns=bank_columns)
+    st.dataframe(bank_df, use_container_width=True)
+
+    st.subheader("✏️ Edit Cell Bank")
+    cb_edit_map = {f"{row[-2]} ({row[0]})": row[0] for row in bank_rows}  # using derived_name and ID
+
+    if cb_edit_map:
+        selected_cb = st.selectbox("Select Cell Bank to Edit", list(cb_edit_map.keys()))
+        selected_cb_id = cb_edit_map[selected_cb]
+
+        cur.execute("SELECT bank_type FROM cell_banks WHERE id = %s", (selected_cb_id,))
+        cb_row = cur.fetchone()
+
+        if cb_row:
+            cur.execute("SELECT site, room, tank, tower, slot, box, vial_position FROM cell_banks WHERE id = %s", (selected_cb_id,))
+            location_data = cur.fetchone() or ("", "", "", "", "", "", "")
+
+            edit_bank_type = st.selectbox("Bank Type", ["Original", "Master", "Archive", "Working"], index=["Original", "Master", "Archive", "Working"].index(cb_row[0]), key="edit_cb_type")
+            edit_site = st.text_input("Site", value=location_data[0], key="edit_site")
+            edit_room = st.text_input("Room", value=location_data[1], key="edit_room")
+            edit_tank = st.text_input("Tank", value=location_data[2], key="edit_tank")
+            edit_tower = st.text_input("Tower", value=location_data[3], key="edit_tower")
+            edit_slot = st.text_input("Slot", value=location_data[4], key="edit_slot")
+            edit_box = st.text_input("Box", value=location_data[5], key="edit_box")
+            edit_vial_position = st.text_input("Vial Position", value=location_data[6], key="edit_vial_position")
+
+            if st.button("Update Cell Bank"):
+                cur.execute("""
+                    UPDATE cell_banks
+                    SET bank_type = %s, site = %s, room = %s, tank = %s, tower = %s,
+                        slot = %s, box = %s, vial_position = %s
+                    WHERE id = %s
+                """, (
+                    edit_bank_type, edit_site, edit_room, edit_tank, edit_tower,
+                    edit_slot, edit_box, edit_vial_position, selected_cb_id
+                ))
+                conn.commit()
+                st.success(f"✅ Cell Bank ID {selected_cb_id} updated!")
+                st.rerun()
+
+            
+
+# ---------- Tab 4: Vials ----------
+with tab4:
+    st.title("🧪 Add Vials to Cell Bank")
+
+    # Load cell banks
+    cur.execute("""
+        SELECT cb.id, cb.bank_type, dcl.name
+        FROM cell_banks cb
+        JOIN derived_cell_lines dcl ON cb.derived_id = dcl.id
+        ORDER BY cb.id DESC
+    """)
+    bank_entries = cur.fetchall()
+    bank_map = {
+        f"{bank_type} - {derived_name} (Bank ID: {bank_id})": bank_id
+        for bank_id, bank_type, derived_name in bank_entries
+    }
+
+    if bank_map:
+        selected_bank = st.selectbox("Select Cell Bank to Add Vials", list(bank_map.keys()))
+
+        num_vials = st.number_input("Number of Vials to Add", min_value=1, max_value=1000, step=1)
+
+        if st.button("Add Vials"):
+            cur.executemany(
+                "INSERT INTO vials (cell_bank_id) VALUES (%s)",
+                [(bank_map[selected_bank],) for _ in range(num_vials)]
+            )
+            conn.commit()
+            st.success(f"✅ {num_vials} vials added to Cell Bank ID {bank_map[selected_bank]}.")
+            st.rerun()
+
+        st.subheader("✏️ Edit Vial Count")
+
+        cur.execute("SELECT COUNT(*) FROM vials WHERE cell_bank_id = %s", (bank_map[selected_bank],))
+        existing_vial_count = cur.fetchone()[0]
+        st.markdown(f"**Currently: {existing_vial_count} vials in this bank.**")
+
+        new_vial_count = st.number_input(
+            "Update total number of vials",
+            min_value=0,
+            value=existing_vial_count,
+            step=1
+        )
+
+        if st.button("Update Vial Count"):
+            delta = new_vial_count - existing_vial_count
+
+            if delta > 0:
+                cur.executemany(
+                    "INSERT INTO vials (cell_bank_id) VALUES (%s)",
+                    [(bank_map[selected_bank],) for _ in range(delta)]
+                )
+                st.success(f"🧪 Added {delta} new vials.")
+            elif delta < 0:
+                cur.execute(
+                    "DELETE FROM vials WHERE id IN (SELECT id FROM vials WHERE cell_bank_id = %s ORDER BY id DESC LIMIT %s)",
+                    (bank_map[selected_bank], abs(delta))
+                )
+                st.success(f"🧪 Deleted {abs(delta)} vials.")
+            else:
+                st.info("No changes made.")
+
+            conn.commit()
+            st.rerun()
+    else:
+        st.warning("⚠️ No cell banks available yet.")
